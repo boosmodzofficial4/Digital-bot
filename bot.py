@@ -1,87 +1,130 @@
 import logging
-import asyncio
-from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
-from aiogram.dispatcher.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatJoinRequest
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, ChatJoinRequestHandler
+import json
 import os
 
-API_TOKEN = os.getenv("API_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+API_TOKEN = '7320159726:AAESYR2n1EGC9f1VFVnwlPv1sKRrjZ_4gpo'
+ADMIN_ID = 7665158009
 
-bot = Bot(token=API_TOKEN, parse_mode="HTML")
-dp = Dispatcher(bot)
+ACCEPTED_USERS_FILE = 'accepted_users.json'
+BUTTONS_FILE = 'buttons.json'
 
-logging.basicConfig(level=logging.INFO)
+WELCOME_TEXT = """🔥 WELCOME OUR CHANNEL 🔥  
+☠ OFFICIAL [VIP] TELEGRAM CHANNEL ☠  
+...  
+🔥 JOIN THIS VIP  CHANNEL FAST👇"""
 
-accepted_users = set()
-welcome_buttons = []
+def load_json(filename):
+    if not os.path.exists(filename):
+        with open(filename, 'w') as f:
+            json.dump([], f)
+    with open(filename, 'r') as f:
+        return json.load(f)
 
-# Join request auto-approve
-@dp.chat_join_request_handler()
-async def approve_join_request(join_request: types.ChatJoinRequest):
+def save_json(filename, data):
+    with open(filename, 'w') as f:
+        json.dump(data, f, indent=2)
+
+async def join_request_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        await bot.approve_chat_join_request(join_request.chat.id, join_request.from_user.id)
-        accepted_users.add(join_request.from_user.id)
-
-        # Welcome message with button
-        if welcome_buttons:
-            keyboard = InlineKeyboardMarkup(row_width=1)
-            for name, url in welcome_buttons:
-                keyboard.add(InlineKeyboardButton(text=name, url=url))
-            await bot.send_message(join_request.from_user.id,
-                "🔥 WELCOME OUR CHANNEL 🔥\n☠ OFFICIAL [VIP] TELEGRAM CHANNEL ☠\n🔥 JOIN THIS VIP  CHANNEL FAST👇",
-                reply_markup=keyboard
-            )
+        request: ChatJoinRequest = update.chat_join_request
+        await context.bot.approve_chat_join_request(chat_id=request.chat.id, user_id=request.from_user.id)
+        await context.bot.send_message(chat_id=request.from_user.id, text=WELCOME_TEXT, reply_markup=make_buttons())
+        users = load_json(ACCEPTED_USERS_FILE)
+        if request.from_user.id not in users:
+            users.append(request.from_user.id)
+            save_json(ACCEPTED_USERS_FILE, users)
     except Exception as e:
-        print("Error approving user:", e)
-        # Command to see total accepted users
-@dp.message_handler(commands=["AutoAcceptedUsers"])
-async def show_accepted_users_count(message: types.Message):
-    if message.from_user.id == ADMIN_ID:
-        await message.reply(f"Total Auto-Accepted Users: {len(accepted_users)}")
+        print("Error in join request:", e)
 
-# Broadcast message
-@dp.message_handler(commands=["broadcast"])
-async def broadcast_message(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
+def make_buttons():
+    buttons = load_json(BUTTONS_FILE)
+    keyboard = []
+    for btn in buttons:
+        keyboard.append([InlineKeyboardButton(btn['name'], url=btn['link'])])
+    return InlineKeyboardMarkup(keyboard) if keyboard else None
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id == ADMIN_ID:
+        text = (
+            "✅ Bot Command Menu:\n"
+            "/start - Show this help\n"
+            "/AutoAcceptedUsers - Total accepted users\n"
+            "/broadcast <message> - Send message to all users\n"
+            "/addbutton - Add new button\n"
+            "/showbuttons - Show saved buttons"
+        )
+        await update.message.reply_text(text)
+    else:
+        await update.message.reply_text("You are not admin.")
+
+async def show_accepted(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    users = load_json(ACCEPTED_USERS_FILE)
+    await update.message.reply_text(f"Total Auto-Accepted Users: {len(users)}")
+
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
         return
-    text = message.text.split(maxsplit=1)
-    if len(text) < 2:
-        return await message.reply("Usage: /broadcast your_message")
-    
-    msg = text[1]
-    count = 0
-    for user_id in accepted_users:
-        try:
-            await bot.send_message(user_id, msg)
-            count += 1
-        except:
-            pass
-    await message.reply(f"Broadcast sent to {count} users.")
+    msg = ' '.join(context.args)
+    if not msg:
+        await update.message.reply_text("Use: /broadcast your_message")
+        return
 
-# Add VIP button (name + hidden link)
-@dp.message_handler(commands=["addbutton"])
-async def add_button(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
+    users = load_json(ACCEPTED_USERS_FILE)
+    success = 0
+    for uid in users:
+        try:
+            await context.bot.send_message(chat_id=uid, text=msg)
+            success += 1
+        except:
+            continue
+    await update.message.reply_text(f"Broadcast sent to {success} users.")
+
+async def addbutton(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
         return
     try:
-        _, name, url = message.text.split(maxsplit=2)
-        welcome_buttons.append((name, url))
-        await message.reply(f"✅ Button added:\nName: {name}")
-    except:
-        await message.reply("Usage: /addbutton Button_Name https://your-link")
+        await update.message.reply_text("Send button name and link like:\nName | https://t.me/yourchannel")
+        context.user_data['waiting_for_button'] = True
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
-# Start Command - show all commands
-@dp.message_handler(commands=["start"])
-async def start(message: types.Message):
-    if message.from_user.id == ADMIN_ID:
-        await message.reply(
-            "Welcome Admin! Available Commands:\n"
-            "/AutoAcceptedUsers - Total accepted users\n"
-            "/broadcast <msg> - Send message to all\n"
-            "/addbutton <name> <link> - Add hidden VIP button"
-        )
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get('waiting_for_button'):
+        try:
+            name, link = update.message.text.split("|")
+            name = name.strip()
+            link = link.strip()
+            buttons = load_json(BUTTONS_FILE)
+            buttons.append({'name': name, 'link': link})
+            save_json(BUTTONS_FILE, buttons)
+            await update.message.reply_text(f"✅ Button saved: {name}")
+            context.user_data['waiting_for_button'] = False
+        except:
+            await update.message.reply_text("Wrong format. Use:\nName | https://t.me/yourchannel")
+
+async def showbuttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    buttons = load_json(BUTTONS_FILE)
+    if not buttons:
+        await update.message.reply_text("No buttons saved.")
+    else:
+        msg = "Saved Buttons:\n\n"
+        for b in buttons:
+            msg += f"- {b['name']}\n"
+        await update.message.reply_text(msg)
 
 if __name__ == '__main__':
-    executor.start_polling(dp, skip_updates=True)
+    logging.basicConfig(level=logging.INFO)
+    app = ApplicationBuilder().token(API_TOKEN).build()
+
+    app.add_handler(ChatJoinRequestHandler(join_request_handler))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("AutoAcceptedUsers", show_accepted))
+    app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(CommandHandler("addbutton", addbutton))
+    app.add_handler(CommandHandler("showbuttons", showbuttons))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    print("Bot is running...")
+    app.run_polling()
