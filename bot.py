@@ -1,121 +1,87 @@
+import logging
 import asyncio
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler, MessageHandler, filters,
-    ContextTypes, ChatJoinRequestHandler
-)
+from aiogram import Bot, Dispatcher, types
+from aiogram.utils import executor
+from aiogram.dispatcher.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+import os
 
-TOKEN = "7656706051:AAEZTYWiffUFzAvyDkG2MmfH3Ktx0l_CblE"
-ADMIN_ID = 7665158009
-CHANNEL_IDS = [-1001963974161]  # Add more channels here
+API_TOKEN = os.getenv("API_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+
+bot = Bot(token=API_TOKEN, parse_mode="HTML")
+dp = Dispatcher(bot)
+
+logging.basicConfig(level=logging.INFO)
+
 accepted_users = set()
-button_list = []
-auto_post_seconds = 3600
-auto_post_task = None
+welcome_buttons = []
 
-# Auto-accept
-async def join_request_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.chat_join_request.approve()
-    user_id = update.chat_join_request.from_user.id
-    accepted_users.add(user_id)
-    if button_list:
-        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(name, url=url)] for name, url in button_list])
-        await context.bot.send_message(chat_id=user_id, text="Welcome!", reply_markup=keyboard)
-    else:
-        await context.bot.send_message(chat_id=user_id, text="Welcome!")
-        # /AutoAcceptedUsers
-async def show_accepted_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id == ADMIN_ID:
-        await update.message.reply_text(f"Total accepted users: {len(accepted_users)}")
+# Join request auto-approve
+@dp.chat_join_request_handler()
+async def approve_join_request(join_request: types.ChatJoinRequest):
+    try:
+        await bot.approve_chat_join_request(join_request.chat.id, join_request.from_user.id)
+        accepted_users.add(join_request.from_user.id)
 
-# /broadcast
-async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+        # Welcome message with button
+        if welcome_buttons:
+            keyboard = InlineKeyboardMarkup(row_width=1)
+            for name, url in welcome_buttons:
+                keyboard.add(InlineKeyboardButton(text=name, url=url))
+            await bot.send_message(join_request.from_user.id,
+                "🔥 WELCOME OUR CHANNEL 🔥\n☠ OFFICIAL [VIP] TELEGRAM CHANNEL ☠\n🔥 JOIN THIS VIP  CHANNEL FAST👇",
+                reply_markup=keyboard
+            )
+    except Exception as e:
+        print("Error approving user:", e)
+        # Command to see total accepted users
+@dp.message_handler(commands=["AutoAcceptedUsers"])
+async def show_accepted_users_count(message: types.Message):
+    if message.from_user.id == ADMIN_ID:
+        await message.reply(f"Total Auto-Accepted Users: {len(accepted_users)}")
+
+# Broadcast message
+@dp.message_handler(commands=["broadcast"])
+async def broadcast_message(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
         return
-    message = ' '.join(context.args)
+    text = message.text.split(maxsplit=1)
+    if len(text) < 2:
+        return await message.reply("Usage: /broadcast your_message")
+    
+    msg = text[1]
     count = 0
     for user_id in accepted_users:
         try:
-            await context.bot.send_message(chat_id=user_id, text=message)
+            await bot.send_message(user_id, msg)
             count += 1
         except:
             pass
-    await update.message.reply_text(f"Broadcast sent to {count} users.")
+    await message.reply(f"Broadcast sent to {count} users.")
 
-# /addbutton <name> <url>
-async def add_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    if len(context.args) < 2:
-        await update.message.reply_text("Usage: /addbutton <name> <url>")
-        return
-    name = context.args[0]
-    url = context.args[1]
-    button_list.append((name, url))
-    await update.message.reply_text(f"Button '{name}' added.")
-
-# /showbuttons
-async def show_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    if not button_list:
-        await update.message.reply_text("No buttons saved.")
-        return
-    reply = "\n".join([f"{i+1}. {btn[0]}" for i, btn in enumerate(button_list)])
-    await update.message.reply_text(reply)
-    # Auto-post
-async def auto_post(context: ContextTypes.DEFAULT_TYPE):
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(name, url=url)] for name, url in button_list])
-    for channel_id in CHANNEL_IDS:
-        msg = await context.bot.send_message(chat_id=channel_id, text="VIP Access", reply_markup=keyboard)
-        await asyncio.sleep(5)
-        await context.bot.delete_message(chat_id=channel_id, message_id=msg.message_id)
-
-# /setautopost <seconds>
-async def set_auto_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global auto_post_seconds, auto_post_task
-    if update.effective_user.id != ADMIN_ID:
+# Add VIP button (name + hidden link)
+@dp.message_handler(commands=["addbutton"])
+async def add_button(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
         return
     try:
-        auto_post_seconds = int(context.args[0])
-        if auto_post_task:
-            auto_post_task.cancel()
-        auto_post_task = context.application.create_task(repeat_auto_post(context))
-        await update.message.reply_text(f"Auto-post every {auto_post_seconds} seconds.")
+        _, name, url = message.text.split(maxsplit=2)
+        welcome_buttons.append((name, url))
+        await message.reply(f"✅ Button added:\nName: {name}")
     except:
-        await update.message.reply_text("Usage: /setautopost <seconds>")
+        await message.reply("Usage: /addbutton Button_Name https://your-link")
 
-async def repeat_auto_post(context: ContextTypes.DEFAULT_TYPE):
-    while True:
-        await auto_post(context)
-        await asyncio.sleep(auto_post_seconds)
+# Start Command - show all commands
+@dp.message_handler(commands=["start"])
+async def start(message: types.Message):
+    if message.from_user.id == ADMIN_ID:
+        await message.reply(
+            "Welcome Admin! Available Commands:\n"
+            "/AutoAcceptedUsers - Total accepted users\n"
+            "/broadcast <msg> - Send message to all\n"
+            "/addbutton <name> <link> - Add hidden VIP button"
+        )
 
-# /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id == ADMIN_ID:
-        commands = [
-            "/AutoAcceptedUsers",
-            "/broadcast <message>",
-            "/addbutton <name> <url>",
-            "/showbuttons",
-            "/setautopost <seconds>"
-        ]
-        await update.message.reply_text("Available commands:\n" + "\n".join(commands))
-
-# Main
-async def main():
-    app = Application.builder().token(TOKEN).build()
-
-    app.add_handler(ChatJoinRequestHandler(join_request_handler))
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("AutoAcceptedUsers", show_accepted_users))
-    app.add_handler(CommandHandler("broadcast", broadcast))
-    app.add_handler(CommandHandler("addbutton", add_button))
-    app.add_handler(CommandHandler("showbuttons", show_buttons))
-    app.add_handler(CommandHandler("setautopost", set_auto_post))
-
-    print("Bot running...")
-    await app.run_polling()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == '__main__':
+    executor.start_polling(dp, skip_updates=True)
