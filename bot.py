@@ -1,130 +1,116 @@
-import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatJoinRequest
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, ChatJoinRequestHandler
-import json
 import os
+import logging
+import time
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatInviteLink
+from telegram.ext import Updater, CommandHandler, CallbackContext, MessageHandler, Filters, CallbackQueryHandler, ChatJoinRequestHandler
 
-API_TOKEN = '7320159726:AAESYR2n1EGC9f1VFVnwlPv1sKRrjZ_4gpo'
-ADMIN_ID = 7665158009
+API_TOKEN = os.getenv("API_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
-ACCEPTED_USERS_FILE = 'accepted_users.json'
-BUTTONS_FILE = 'buttons.json'
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+approved_users = set()
+custom_buttons = []
 
 WELCOME_TEXT = """🔥 WELCOME OUR CHANNEL 🔥  
 ☠ OFFICIAL [VIP] TELEGRAM CHANNEL ☠  
-...  
-🔥 JOIN THIS VIP  CHANNEL FAST👇"""
+🔥 JOIN THIS VIP CHANNEL FAST👇"""
 
-def load_json(filename):
-    if not os.path.exists(filename):
-        with open(filename, 'w') as f:
-            json.dump([], f)
-    with open(filename, 'r') as f:
-        return json.load(f)
+WELCOME_BUTTONS = [
+    {"name": "VIP 1", "url": "https://t.me/+rRE7PGogVh5lM2Y1"}
+]
 
-def save_json(filename, data):
-    with open(filename, 'w') as f:
-        json.dump(data, f, indent=2)
-
-async def join_request_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        request: ChatJoinRequest = update.chat_join_request
-        await context.bot.approve_chat_join_request(chat_id=request.chat.id, user_id=request.from_user.id)
-        await context.bot.send_message(chat_id=request.from_user.id, text=WELCOME_TEXT, reply_markup=make_buttons())
-        users = load_json(ACCEPTED_USERS_FILE)
-        if request.from_user.id not in users:
-            users.append(request.from_user.id)
-            save_json(ACCEPTED_USERS_FILE, users)
-    except Exception as e:
-        print("Error in join request:", e)
-
-def make_buttons():
-    buttons = load_json(BUTTONS_FILE)
-    keyboard = []
-    for btn in buttons:
-        keyboard.append([InlineKeyboardButton(btn['name'], url=btn['link'])])
-    return InlineKeyboardMarkup(keyboard) if keyboard else None
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start(update: Update, context: CallbackContext):
     if update.effective_user.id == ADMIN_ID:
-        text = (
-            "✅ Bot Command Menu:\n"
-            "/start - Show this help\n"
-            "/AutoAcceptedUsers - Total accepted users\n"
-            "/broadcast <message> - Send message to all users\n"
-            "/addbutton - Add new button\n"
-            "/showbuttons - Show saved buttons"
+        commands = [
+            "/AutoAcceptedUsers - Total auto-accepted users",
+            "/broadcast <msg> - Send msg to all",
+            "/addbutton - Add new VIP button",
+            "/postlist - Send buttons to all channels",
+            "/setdelete <sec> - Auto-delete time",
+            "/setautopost <sec> - Auto-post time",
+            "/showbuttons - Show saved button list"
+        ]
+        update.message.reply_text("Available Commands:\n" + "\n".join(commands))
+
+def join_request(update: Update, context: CallbackContext):
+    try:
+        user_id = update.chat_join_request.from_user.id
+        chat_id = update.chat_join_request.chat.id
+        context.bot.approve_chat_join_request(chat_id, user_id)
+        approved_users.add(user_id)
+
+        buttons = [InlineKeyboardButton(btn["name"], url=btn["url"]) for btn in WELCOME_BUTTONS]
+        reply_markup = InlineKeyboardMarkup.from_column(buttons)
+
+        context.bot.send_message(
+            chat_id=user_id,
+            text=WELCOME_TEXT,
+            reply_markup=reply_markup
         )
-        await update.message.reply_text(text)
-    else:
-        await update.message.reply_text("You are not admin.")
+    except Exception as e:
+        logger.error(f"Join request error: {e}")
 
-async def show_accepted(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    users = load_json(ACCEPTED_USERS_FILE)
-    await update.message.reply_text(f"Total Auto-Accepted Users: {len(users)}")
+def auto_users(update: Update, context: CallbackContext):
+    update.message.reply_text(f"Total Auto-Accepted Users: {len(approved_users)}")
 
-async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def broadcast(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
         return
-    msg = ' '.join(context.args)
-    if not msg:
-        await update.message.reply_text("Use: /broadcast your_message")
+
+    msg = update.message.text.split(' ', 1)
+    if len(msg) < 2:
+        update.message.reply_text("Usage: /broadcast your_message")
         return
 
-    users = load_json(ACCEPTED_USERS_FILE)
-    success = 0
-    for uid in users:
+    message = msg[1]
+    count = 0
+    for uid in approved_users:
         try:
-            await context.bot.send_message(chat_id=uid, text=msg)
-            success += 1
+            context.bot.send_message(chat_id=uid, text=message)
+            count += 1
         except:
             continue
-    await update.message.reply_text(f"Broadcast sent to {success} users.")
+    update.message.reply_text(f"Broadcast sent to {count} users.")
 
-async def addbutton(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def add_button(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
         return
     try:
-        await update.message.reply_text("Send button name and link like:\nName | https://t.me/yourchannel")
-        context.user_data['waiting_for_button'] = True
-    except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
+        parts = update.message.text.split(" ", 2)
+        if len(parts) < 3:
+            update.message.reply_text("Usage: /addbutton <Button Name> <URL>")
+            return
+        name, url = parts[1], parts[2]
+        custom_buttons.append({"name": name, "url": url})
+        update.message.reply_text(f"Button added: {name}")
+    except:
+        update.message.reply_text("Failed to add button.")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get('waiting_for_button'):
-        try:
-            name, link = update.message.text.split("|")
-            name = name.strip()
-            link = link.strip()
-            buttons = load_json(BUTTONS_FILE)
-            buttons.append({'name': name, 'link': link})
-            save_json(BUTTONS_FILE, buttons)
-            await update.message.reply_text(f"✅ Button saved: {name}")
-            context.user_data['waiting_for_button'] = False
-        except:
-            await update.message.reply_text("Wrong format. Use:\nName | https://t.me/yourchannel")
+def post_list(update: Update, context: CallbackContext):
+    buttons = [InlineKeyboardButton(btn["name"], url=btn["url"]) for btn in custom_buttons]
+    markup = InlineKeyboardMarkup.from_column(buttons)
+    update.message.reply_text("VIP Channels:", reply_markup=markup)
 
-async def showbuttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    buttons = load_json(BUTTONS_FILE)
-    if not buttons:
-        await update.message.reply_text("No buttons saved.")
-    else:
-        msg = "Saved Buttons:\n\n"
-        for b in buttons:
-            msg += f"- {b['name']}\n"
-        await update.message.reply_text(msg)
+def show_buttons(update: Update, context: CallbackContext):
+    text = "\n".join([f"{btn['name']} → {btn['url']}" for btn in custom_buttons])
+    update.message.reply_text("Saved Buttons:\n" + text)
 
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    app = ApplicationBuilder().token(API_TOKEN).build()
+def main():
+    updater = Updater(API_TOKEN, use_context=True)
+    dp = updater.dispatcher
 
-    app.add_handler(ChatJoinRequestHandler(join_request_handler))
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("AutoAcceptedUsers", show_accepted))
-    app.add_handler(CommandHandler("broadcast", broadcast))
-    app.add_handler(CommandHandler("addbutton", addbutton))
-    app.add_handler(CommandHandler("showbuttons", showbuttons))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("AutoAcceptedUsers", auto_users))
+    dp.add_handler(CommandHandler("broadcast", broadcast))
+    dp.add_handler(CommandHandler("addbutton", add_button))
+    dp.add_handler(CommandHandler("postlist", post_list))
+    dp.add_handler(CommandHandler("showbuttons", show_buttons))
+    dp.add_handler(ChatJoinRequestHandler(join_request))
 
-    print("Bot is running...")
-    app.run_polling()
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == "__main__":
+    main()
