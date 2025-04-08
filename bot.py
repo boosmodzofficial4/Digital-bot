@@ -1,125 +1,151 @@
-import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-import time
+import asyncio
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.utils import executor
+from aiogram.dispatcher.filters import Command
+import json
+import os
+from datetime import datetime, timedelta
 
-API_TOKEN = '7656706051:AAEZTYWiffUFzAvyDkG2MmfH3Ktx0l_CblE'
-bot = telebot.TeleBot(API_TOKEN)
+API_TOKEN = '7320159726:AAESYR2n1EGC9f1VFVnwlPv1sKRrjZ_4gpo'
+ADMIN_IDS = [7665158009, 7656706051, 7644302009]
 
-ADMIN_ID = 7665158009
-CHANNELS = ['-1001963974161']  # Demo private channel
-BUTTON_LIST = [
-    {'name': 'VIP Movies', 'link': 'https://t.me/+xWhqm7Sh-u5jYTg1'},
-]
+bot = Bot(token=API_TOKEN, parse_mode='HTML')
+dp = Dispatcher(bot)
 
-user_ids = set()
-autodelete_seconds = 3600  # Default 1 hour auto-delete time
+accepted_users = set()
+button_list = []
+auto_delete_time = 60
+auto_post_interval = None
+target_channels = ['-1001963974161']
+welcome_message = """🔥 WELCOME OUR CHANNEL 🔥  
+☠ OFFICIAL [VIP] TELEGRAM CHANNEL ☠  
+...  
+🔥 JOIN THIS VIP  CHANNEL FAST👇"""
 
-# /start command for admin
-@bot.message_handler(commands=['start'])
-def start(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    commands = """
-✅ Available Commands:
+# Save & load button data
+def save_buttons():
+    with open('buttons.json', 'w') as f:
+        json.dump(button_list, f)
 
-/start - Show this command list
-/postlist - Post button list to all channels
-/addbutton Name Link - Add a new button
-/showbuttons - Show all buttons
-/setdelete seconds - Set auto-delete time (in seconds)
-/broadcast Your message here - Send message to all joined users
-"""
-    bot.reply_to(message, commands)
+def load_buttons():
+    global button_list
+    if os.path.exists('buttons.json'):
+        with open('buttons.json', 'r') as f:
+            button_list = json.load(f)
 
-# Auto-approve join request (placeholder)
-@bot.chat_join_request_handler(func=lambda r: True)
-def approve_join_request(request):
-    bot.approve_chat_join_request(request.chat.id, request.from_user.id)
-    if request.from_user.id not in user_ids:
-        user_ids.add(request.from_user.id)
-        send_welcome(request.from_user.id)
+# Save & load accepted user data
+def save_users():
+    with open('users.json', 'w') as f:
+        json.dump(list(accepted_users), f)
 
-# Welcome message
-def send_welcome(user_id):
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🔥 JOIN THIS VIP CHANNEL FAST 👇", url='https://t.me/+xWhqm7Sh-u5jYTg1'))
-    text = """🔥 WELCOME OUR CHANNEL 🔥
+def load_users():
+    global accepted_users
+    if os.path.exists('users.json'):
+        with open('users.json', 'r') as f:
+            accepted_users = set(json.load(f))
+            @dp.message_handler(commands=['start'])
+async def start_cmd(message: types.Message):
+    if message.from_user.id in ADMIN_IDS:
+        cmds = [
+            "/addbutton - नया बटन जोड़ें",
+            "/showbuttons - सभी बटन लिस्ट देखें",
+            "/postlist - सभी चैनलों में बटन लिस्ट भेजें",
+            "/setdelete <seconds> - auto-delete टाइम सेट करें",
+            "/setautopost <seconds> - auto-post टाइम सेट करें",
+            "/AutoAcceptedUsers - auto-accepted यूज़र्स की गिनती",
+            "/broadcast <message> - सभी यूज़र्स को मैसेज भेजें"
+        ]
+        await message.reply("\n".join(cmds))
 
-☠ OFFICIAL [VIP] TELEGRAM CHANNEL ☠
-
-💋-NEW ADULT 18+ GAMES XNXX
-💳RESSO+SPOTIFY+NETFLIX
-✅ -HACKING FILES AND VIDEOS
-📷 SECRET MOD APPS FOR YOU
-🛡️-DIRECT PREMIUM+APPS UPLOAD"""
-    bot.send_message(user_id, text, reply_markup=markup)
-
-# Post the button list
-@bot.message_handler(commands=['postlist'])
-def post_list(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    markup = InlineKeyboardMarkup()
-    for btn in BUTTON_LIST:
-        markup.add(InlineKeyboardButton(btn['name'], url=btn['link']))
-    text = "🔥 EXPLORE OUR PREMIUM CHANNELS 🔥"
-    for ch in CHANNELS:
-        sent = bot.send_message(ch, text, reply_markup=markup)
-        time.sleep(autodelete_seconds)
+@dp.message_handler(commands=['addbutton'])
+async def add_button(message: types.Message):
+    if message.from_user.id in ADMIN_IDS:
         try:
-            bot.delete_message(ch, sent.message_id)
+            parts = message.text.split(' ', 2)
+            name, url = parts[1], parts[2]
+            button_list.append({'name': name, 'url': url})
+            save_buttons()
+            await message.reply(f"✅ बटन '{name}' जोड़ा गया।")
         except:
-            pass
+            await message.reply("❌ Format: /addbutton <name> <url>")
 
-# Add a new button
-@bot.message_handler(commands=['addbutton'])
-def add_button(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    parts = message.text.split(' ', 2)
-    if len(parts) < 3:
-        bot.reply_to(message, "Use format: /addbutton ButtonName Link")
-        return
-    BUTTON_LIST.append({'name': parts[1], 'link': parts[2]})
-    bot.reply_to(message, "✅ Button added.")
+@dp.message_handler(commands=['showbuttons'])
+async def show_buttons(message: types.Message):
+    if message.from_user.id in ADMIN_IDS:
+        text = "\n".join([f"{i+1}. {b['name']}" for i, b in enumerate(button_list)])
+        await message.reply(text or "कोई बटन नहीं है।")
 
-# Show button list to admin
-@bot.message_handler(commands=['showbuttons'])
-def show_buttons(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    text = "\n".join([f"{i+1}. {btn['name']}" for i, btn in enumerate(BUTTON_LIST)])
-    bot.reply_to(message, text or "No buttons added.")
+@dp.message_handler(commands=['postlist'])
+async def post_buttons(message: types.Message):
+    if message.from_user.id in ADMIN_IDS:
+        kb = InlineKeyboardMarkup(row_width=2)
+        for btn in button_list:
+            kb.add(InlineKeyboardButton(btn['name'], url=btn['url']))
+        for cid in target_channels:
+            msg = await bot.send_message(cid, "👇 VIP चैनल्स की लिस्ट 👇", reply_markup=kb)
+            await asyncio.sleep(1)
+            await asyncio.sleep(auto_delete_time)
+            await msg.delete()
 
-# Change auto-delete time
-@bot.message_handler(commands=['setdelete'])
-def set_delete_time(message):
-    if message.from_user.id != ADMIN_ID:
-        return
+@dp.message_handler(commands=['setdelete'])
+async def set_delete(message: types.Message):
+    global auto_delete_time
+    if message.from_user.id in ADMIN_IDS:
+        try:
+            auto_delete_time = int(message.text.split()[1])
+            await message.reply(f"✅ Auto-delete time set to {auto_delete_time} sec.")
+        except:
+            await message.reply("❌ Format: /setdelete <seconds>")
+
+@dp.message_handler(commands=['setautopost'])
+async def set_autopost(message: types.Message):
+    global auto_post_interval
+    if message.from_user.id in ADMIN_IDS:
+        try:
+            sec = int(message.text.split()[1])
+            auto_post_interval = sec
+            await message.reply(f"✅ Auto-post time set to {sec} sec.")
+        except:
+            await message.reply("❌ Format: /setautopost <seconds>")
+
+async def auto_post_job():
+    while True:
+        if auto_post_interval:
+            await post_buttons(types.Message(chat=types.Chat(id=ADMIN_IDS[0], type="private"), from_user=types.User(id=ADMIN_IDS[0], is_bot=False), message_id=0))
+        await asyncio.sleep(auto_post_interval or 5)
+
+@dp.message_handler(commands=['AutoAcceptedUsers'])
+async def show_accepted(message: types.Message):
+    await message.reply(f"✅ Total Auto-Accepted Users: {len(accepted_users)}")
+
+@dp.message_handler(commands=['broadcast'])
+async def broadcast_msg(message: types.Message):
+    if message.from_user.id in ADMIN_IDS:
+        text = message.text.replace('/broadcast ', '')
+        count = 0
+        for uid in accepted_users:
+            try:
+                await bot.send_message(uid, text)
+                count += 1
+            except:
+                pass
+        await message.reply(f"✅ Broadcast sent to {count} users.")
+
+@dp.chat_join_request_handler()
+async def join_handler(update: types.ChatJoinRequest):
     try:
-        global autodelete_seconds
-        autodelete_seconds = int(message.text.split()[1])
-        bot.reply_to(message, f"✅ Auto-delete set to {autodelete_seconds} sec.")
+        await bot.approve_chat_join_request(update.chat.id, update.from_user.id)
+        accepted_users.add(update.from_user.id)
+        save_users()
+        kb = InlineKeyboardMarkup().add(InlineKeyboardButton("VIP Channel", url=button_list[0]['url'] if button_list else "https://t.me"))
+        await bot.send_message(update.from_user.id, welcome_message, reply_markup=kb)
     except:
-        bot.reply_to(message, "Use format: /setdelete 3600")
+        pass
 
-# Broadcast to all users
-@bot.message_handler(commands=['broadcast'])
-def broadcast(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    text = message.text.replace('/broadcast', '').strip()
-    if not text:
-        bot.reply_to(message, "Usage: /broadcast Your message here")
-        return
-    success = 0
-    for uid in user_ids:
-        try:
-            bot.send_message(uid, text)
-            success += 1
-        except:
-            pass
-    bot.reply_to(message, f"✅ Broadcast sent to {success} users.")
-
-print("Bot is running...")
-bot.infinity_polling()
+if __name__ == '__main__':
+    load_buttons()
+    load_users()
+    loop = asyncio.get_event_loop()
+    loop.create_task(auto_post_job())
+    executor.start_polling(dp, skip_updates=True)
